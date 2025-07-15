@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: backend-astro-mio
+    runtime: python
+    buildCommand: ""
+    startCommand: gunicorn app:app
+    env: python
+    region: oregon
+    plan: free
