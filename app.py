@@ -9,7 +9,8 @@ app = Flask(__name__)
 CORS(app)
 
 # Cargar efemérides (se descargará automáticamente si no existe localmente)
-ephemeris = load('de442.bsp')
+ephemeris = load('de421.bsp')
+
 earth = ephemeris['earth']
 moon = ephemeris['moon']
 sun = ephemeris['sun']
