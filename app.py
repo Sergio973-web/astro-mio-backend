@@ -3,12 +3,12 @@ from flask_cors import CORS
 from skyfield.api import load, wgs84
 from datetime import datetime, timedelta
 import pytz
-import os  # <--- IMPORTANTE para Render
+import os
 
 app = Flask(__name__)
 CORS(app)
 
-# Cargar efemérides
+# Cargar efemérides (se descargará automáticamente si no existe localmente)
 ephemeris = load('de442.bsp')
 earth = ephemeris['earth']
 moon = ephemeris['moon']
@@ -95,5 +95,5 @@ def api_luna():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5050))  # Puerto que Render asigna
+    port = int(os.environ.get('PORT', 5050))
     app.run(host='0.0.0.0', port=port)
