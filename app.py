@@ -19,6 +19,10 @@ observer = earth + wgs84.latlon(-35.6581, -63.7575, elevation_m=135)
 
 SIDEREAL_PERIOD = 27.321661
 
+@app.route('/')
+def home():
+    return 'Astro-Mio backend funcionando 🚀'
+
 @app.route('/api/luna', methods=['POST'])
 def api_luna():
     try:
@@ -85,6 +89,7 @@ def api_luna():
             orbita['sol_equivalente'] = fecha_sol.strftime('%Y-%m-%d') if fecha_sol else None
             orbita['interpretacion'] = "Energía Complementaria Día de nacimiento" if sexo else ""
 
+            # Limpiar datos internos no necesarios en la respuesta
             del orbita['ra_luna']
             del orbita['dec_luna']
 
