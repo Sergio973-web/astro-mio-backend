@@ -10,28 +10,28 @@ CORS(app)
 
 SIDEREAL_PERIOD = 27.321661  # período sideral de la Luna
 
-# Latitud y longitud del observador (Argentina)
+# Latitud y longitud del observador (Argentina, solo para referencia)
 LAT = -35.6581
 LON = -63.7575
 
 def datetime_to_julian(fecha):
     """Convierte datetime a JD UT para swe"""
-    return swe.julday(fecha.year, fecha.month, fecha.day, fecha.hour + fecha.minute/60.0 + fecha.second/3600.0)
+    return swe.julday(
+        fecha.year, fecha.month, fecha.day,
+        fecha.hour + fecha.minute/60.0 + fecha.second/3600.0
+    )
 
 def calcular_posicion_luna(fecha):
-    """Devuelve RA y DEC de la Luna usando swe en grados"""
+    """Devuelve RA y DEC de la Luna en grados usando swe"""
     jd = datetime_to_julian(fecha)
-    lon, lat, dist = swe.calc_ut(jd, swe.MOON)[0:3]  # longitud, latitud e distancia
-    # Convertimos a RA/DEC usando equatorial transformation interna de swe
-    ra, dec, dist = swe.cotrans(lon, lat, 0, 0)
-    return ra, dec
+    lon, lat, dist = swe.calc_ut(jd, swe.MOON, swe.FLG_EQUATORIAL)[0:3]
+    return lon, lat  # RA, DEC en grados
 
 def calcular_posicion_sol(fecha):
-    """Devuelve RA y DEC del Sol usando swe en grados"""
+    """Devuelve RA y DEC del Sol en grados usando swe"""
     jd = datetime_to_julian(fecha)
-    lon, lat, dist = swe.calc_ut(jd, swe.SUN)[0:3]
-    ra, dec, dist = swe.cotrans(lon, lat, 0, 0)
-    return ra, dec
+    lon, lat, dist = swe.calc_ut(jd, swe.SUN, swe.FLG_EQUATORIAL)[0:3]
+    return lon, lat  # RA, DEC en grados
 
 @app.route('/api/luna', methods=['POST'])
 def api_luna():
@@ -96,7 +96,6 @@ def api_luna():
 
         fecha_sol_mas_cercana = None
         diferencia_minima = float('inf')
-        ra_sol_final = dec_sol_final = 0.0
 
         for i in range(366):
             fecha_busqueda = fecha_luna.replace(month=1, day=1) + timedelta(days=i)
@@ -104,15 +103,13 @@ def api_luna():
 
             diff_ra = abs(ra_luna - ra_sol)
             diff_dec = abs(dec_luna - dec_sol)
-            diferencia = (diff_ra * 2 + diff_dec * 2) * 0.5
+            diferencia = (diff_ra**2 + diff_dec**2)**0.5
 
             if diferencia < diferencia_minima and diff_ra < tol_degrees and diff_dec < tol_degrees:
                 diferencia_minima = diferencia
                 fecha_sol_mas_cercana = fecha_busqueda
-                ra_sol_final = ra_sol
-                dec_sol_final = dec_sol
 
-        interpretacion = "Energía Complementaria Día de nacimiento" if sexo in ['masculino','femenino'] else ""
+        interpretacion = "Energía Complementaria Día de nacimiento" if sexo in ['masculino', 'femenino'] else ""
 
         orbita_encontrada['sol_equivalente'] = fecha_sol_mas_cercana.strftime('%Y-%m-%d') if fecha_sol_mas_cercana else "No encontrada"
         orbita_encontrada['interpretacion'] = interpretacion
