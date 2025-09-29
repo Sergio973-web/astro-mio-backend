@@ -8,16 +8,20 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Cargar efemérides (se descargará automáticamente si no existe localmente)
+# Cargar efemérides
 ephemeris = load('de421.bsp')
-
 earth = ephemeris['earth']
 moon = ephemeris['moon']
 sun = ephemeris['sun']
 ts = load.timescale()
 observer = earth + wgs84.latlon(-35.6581, -63.7575, elevation_m=135)
 
-SIDEREAL_PERIOD = 27.321661
+SIDEREAL_PERIOD = 27.321661  # días
+
+def diff_angle(a, b):
+    """Diferencia mínima entre dos ángulos en grados"""
+    d = abs(a - b) % 360
+    return min(d, 360 - d)
 
 @app.route('/')
 def home():
@@ -28,32 +32,37 @@ def api_luna():
     try:
         data = request.get_json()
         fecha_str = data.get('fecha')
-        tolerancia = float(data.get('tolerancia', '10'))
+        tolerancia = float(data.get('tolerancia', 10))
         sexo = data.get('sexo', '').lower()
 
         argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
-        fecha0 = datetime.fromisoformat(fecha_str)
+        # Intentar parsear fecha en ISO, sino con formato DD/MM/YYYY
+        try:
+            fecha0 = datetime.fromisoformat(fecha_str)
+        except:
+            fecha0 = datetime.strptime(fecha_str, '%d/%m/%Y')
         if fecha0.tzinfo is None:
             fecha0 = argentina_tz.localize(fecha0)
         fecha0 = fecha0.astimezone(pytz.utc)
 
         def calcular_posicion_luna(fecha):
-            t = ts.utc(fecha.year, fecha.month, fecha.day, fecha.hour, fecha.minute)
+            t = ts.utc(fecha.year, fecha.month, fecha.day, fecha.hour, fecha.minute, fecha.second)
             astrometric = observer.at(t).observe(moon).apparent()
             ra, dec, _ = astrometric.radec()
-            return ra.hours * 15.0, dec.degrees
+            return ra.hours * 15.0, dec.degrees  # RA en grados
 
         ra0, dec0 = calcular_posicion_luna(fecha0)
         orbitas = []
         fin = fecha0 + timedelta(days=365)
 
+        # Buscar siguiente posición similar de la Luna (aprox. cada periodo sideral)
         k = 0
         while True:
             fecha_k = fecha0 + timedelta(days=SIDEREAL_PERIOD * k)
             if fecha_k > fin:
                 break
             rak, deck = calcular_posicion_luna(fecha_k)
-            if abs(ra0 - rak) < tolerancia and abs(dec0 - deck) < tolerancia:
+            if diff_angle(ra0, rak) < tolerancia and abs(dec0 - deck) < tolerancia:
                 orbitas.append({
                     'fecha': fecha_k.strftime('%Y-%m-%d'),
                     'luna': {
@@ -72,24 +81,25 @@ def api_luna():
             dec_luna = orbita['dec_luna']
             fecha_luna = datetime.strptime(orbita['fecha'], '%Y-%m-%d').replace(tzinfo=pytz.utc)
 
-            # Buscar fecha del Sol más cercana
-            fecha_sol = None
+            # Buscar fecha del Sol más cercana a la posición de la Luna
+            fecha_inicio = fecha_luna - timedelta(days=182)  # medio año antes
+            fecha_fin = fecha_luna + timedelta(days=182)
             min_diff = float('inf')
+            fecha_sol = None
 
-            for i in range(366):
-                fecha_busqueda = fecha_luna.replace(month=1, day=1) + timedelta(days=i)
-                t_sol = ts.utc(fecha_busqueda.year, fecha_busqueda.month, fecha_busqueda.day)
-                astrometric_sol = observer.at(t_sol).observe(sun).apparent()
-                ra_sol, dec_sol, _ = astrometric_sol.radec()
-                diff = abs(ra_luna - ra_sol.hours * 15) + abs(dec_luna - dec_sol.degrees)
+            for i in range((fecha_fin - fecha_inicio).days + 1):
+                f = fecha_inicio + timedelta(days=i)
+                t_sol = ts.utc(f.year, f.month, f.day)
+                ra_sol, dec_sol, _ = observer.at(t_sol).observe(sun).apparent().radec()
+                diff = diff_angle(ra_luna, ra_sol.hours * 15) + abs(dec_luna - dec_sol.degrees)
                 if diff < min_diff:
                     min_diff = diff
-                    fecha_sol = fecha_busqueda
+                    fecha_sol = f
 
             orbita['sol_equivalente'] = fecha_sol.strftime('%Y-%m-%d') if fecha_sol else None
             orbita['interpretacion'] = "Energía Complementaria Día de nacimiento" if sexo else ""
 
-            # Limpiar datos internos no necesarios en la respuesta
+            # Limpiar datos internos
             del orbita['ra_luna']
             del orbita['dec_luna']
 
