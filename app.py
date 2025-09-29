@@ -1,34 +1,41 @@
 from flask_cors import CORS
 from flask import Flask, request, jsonify
-from skyfield.api import load, wgs84, Topos
 from datetime import datetime, timedelta
 import pytz
 import traceback
-import sys
 import swisseph as swe  # PySwissEphemeris
 
 app = Flask(__name__)
 CORS(app)
 
-try:
-    # Cargar efemérides y objetos celestes
-    ephemeris = load('de421.bsp')
-    earth = ephemeris['earth']
-    moon = ephemeris['moon']
-    sun = ephemeris['sun']
-    ts = load.timescale()
-    observer = earth + wgs84.latlon(-35.6581, -63.7575, elevation_m=135)
-except Exception as e:
-    print("❌ Error al cargar efemérides o inicializar observador:")
-    traceback.print_exc()
-    sys.exit(1)
+SIDEREAL_PERIOD = 27.321661  # período sideral de la Luna
 
-SIDEREAL_PERIOD = 27.321661
+# Latitud y longitud del observador (Argentina)
+LAT = -35.6581
+LON = -63.7575
+
+def datetime_to_julian(fecha):
+    """Convierte datetime a JD UT para swe"""
+    return swe.julday(fecha.year, fecha.month, fecha.day, fecha.hour + fecha.minute/60.0 + fecha.second/3600.0)
+
+def calcular_posicion_luna(fecha):
+    """Devuelve RA y DEC de la Luna usando swe en grados"""
+    jd = datetime_to_julian(fecha)
+    lon, lat, dist = swe.calc_ut(jd, swe.MOON)[0:3]  # longitud, latitud e distancia
+    # Convertimos a RA/DEC usando equatorial transformation interna de swe
+    ra, dec, dist = swe.cotrans(lon, lat, 0, 0)
+    return ra, dec
+
+def calcular_posicion_sol(fecha):
+    """Devuelve RA y DEC del Sol usando swe en grados"""
+    jd = datetime_to_julian(fecha)
+    lon, lat, dist = swe.calc_ut(jd, swe.SUN)[0:3]
+    ra, dec, dist = swe.cotrans(lon, lat, 0, 0)
+    return ra, dec
 
 @app.route('/api/luna', methods=['POST'])
 def api_luna():
     try:
-        print("📥 Solicitud recibida en /api/luna")
         data = request.get_json()
         if not data:
             return jsonify({'error': 'No se recibió un JSON válido'}), 400
@@ -45,21 +52,14 @@ def api_luna():
         except ValueError:
             return jsonify({'error': 'Tolerancia debe ser un número'}), 400
 
-        try:
-            argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
-            fecha0 = datetime.fromisoformat(fecha_str)
-            if fecha0.tzinfo is None:
-                fecha0 = argentina_tz.localize(fecha0)
-            fecha0 = fecha0.astimezone(pytz.utc)
-        except ValueError:
-            return jsonify({'error': 'Formato de fecha inválido. Usá ISO 8601, ej. "2023-05-11T00:00:00"'}), 400
+        # Parsear fecha y ajustar a zona horaria Argentina
+        argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
+        fecha0 = datetime.fromisoformat(fecha_str)
+        if fecha0.tzinfo is None:
+            fecha0 = argentina_tz.localize(fecha0)
+        fecha0 = fecha0.astimezone(pytz.utc)
 
-        def calcular_posicion_luna(fecha):
-            t = ts.utc(fecha.year, fecha.month, fecha.day, fecha.hour, fecha.minute)
-            astrometric = observer.at(t).observe(moon).apparent()
-            ra, dec, _ = astrometric.radec()
-            return ra.hours * 15.0, dec.degrees
-
+        # Posición inicial de la Luna
         ra0, dec0 = calcular_posicion_luna(fecha0)
         inicio = fecha0 - timedelta(days=30)
         fin = datetime.now(pytz.utc) + timedelta(days=365)
@@ -77,7 +77,7 @@ def api_luna():
                     orbita_encontrada = {
                         'fecha': fecha_k.strftime('%Y-%m-%d'),
                         'luna': {
-                            'ascension_recta': f'{(rak / 15):.2f}h',
+                            'ascension_recta': f'{rak:.2f}°',
                             'declinacion': f'{deck:.2f}°'
                         },
                         'ra_luna': rak,
@@ -89,7 +89,7 @@ def api_luna():
         if not orbita_encontrada:
             return jsonify({'orbitas': []})
 
-        # Buscar fecha solar equivalente (más cercana)
+        # Buscar fecha solar equivalente
         fecha_luna = datetime.strptime(orbita_encontrada['fecha'], '%Y-%m-%d').replace(tzinfo=pytz.utc)
         ra_luna = orbita_encontrada['ra_luna']
         dec_luna = orbita_encontrada['dec_luna']
@@ -100,25 +100,19 @@ def api_luna():
 
         for i in range(366):
             fecha_busqueda = fecha_luna.replace(month=1, day=1) + timedelta(days=i)
-            t_sol = ts.utc(fecha_busqueda.year, fecha_busqueda.month, fecha_busqueda.day)
-            astrometric_sol = observer.at(t_sol).observe(sun).apparent()
-            ra_sol, dec_sol, _ = astrometric_sol.radec()
+            ra_sol, dec_sol = calcular_posicion_sol(fecha_busqueda)
 
-            diff_ra = abs(ra_luna - ra_sol.hours * 15)
-            diff_dec = abs(dec_luna - dec_sol.degrees)
+            diff_ra = abs(ra_luna - ra_sol)
+            diff_dec = abs(dec_luna - dec_sol)
             diferencia = (diff_ra * 2 + diff_dec * 2) * 0.5
 
             if diferencia < diferencia_minima and diff_ra < tol_degrees and diff_dec < tol_degrees:
                 diferencia_minima = diferencia
                 fecha_sol_mas_cercana = fecha_busqueda
-                ra_sol_final = ra_sol.hours * 15
-                dec_sol_final = dec_sol.degrees
+                ra_sol_final = ra_sol
+                dec_sol_final = dec_sol
 
-        interpretacion = ""
-        if sexo == "femenino":
-            interpretacion = "Energía Complementaria Día de nacimiento"
-        elif sexo == "masculino":
-            interpretacion = "Energía Complementaria Día de nacimiento"
+        interpretacion = "Energía Complementaria Día de nacimiento" if sexo in ['masculino','femenino'] else ""
 
         orbita_encontrada['sol_equivalente'] = fecha_sol_mas_cercana.strftime('%Y-%m-%d') if fecha_sol_mas_cercana else "No encontrada"
         orbita_encontrada['interpretacion'] = interpretacion
@@ -129,76 +123,8 @@ def api_luna():
         return jsonify({'orbitas': [orbita_encontrada]})
 
     except Exception as e:
-        print("❌ Error en el procesamiento de la solicitud:")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-
-
-# Inicializamos Skyfield para casas
-ts = load.timescale()
-planets = load('de421.bsp')
-earth = planets['earth']
-sun = planets['sun']
-
-# Función para calcular las fechas en que el Sol cruza cada cúspide
-def fechas_sol_en_cusps(cusps, anio, lat, lon, ts, sun, tolerancia=1.0):
-    fechas_resultado = {}
-
-    for casa, cuspide in cusps.items():
-        fecha_encontrada = None
-
-        for i in range(366):
-            fecha = datetime(anio, 1, 1, tzinfo=pytz.utc) + timedelta(days=i)
-            t = ts.utc(fecha.year, fecha.month, fecha.day)
-            observer = earth + Topos(latitude_degrees=lat, longitude_degrees=lon)
-            astros_sol = observer.at(t).observe(sun)
-            ecl_lon = astros_sol.apparent().ecliptic_latlon()[1].degrees
-            diff = abs((ecl_lon - cuspide + 180) % 360 - 180)
-
-            if diff < tolerancia:
-                fecha_encontrada = fecha.strftime('%Y-%m-%d')
-                break
-
-        fechas_resultado[casa] = fecha_encontrada or 'No encontrada'
-
-    return fechas_resultado
-
-
-@app.route('/api/casas', methods=['POST'])
-def api_casas():
-    data = request.get_json()
-
-    if not all(k in data for k in ('fecha', 'lat', 'lon')):
-        return jsonify({"error": "Faltan datos: 'fecha', 'lat', 'lon'"}), 400
-
-    dt_str = data['fecha']
-    lat = data['lat']
-    lon = data['lon']
-
-    try:
-        dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M")
-        dt = pytz.utc.localize(dt)
-    except ValueError:
-        return jsonify({"error": "Formato de fecha inválido. Esperado: YYYY-MM-DDTHH:MM"}), 400
-
-    t = ts.utc(dt.year, dt.month, dt.day, dt.hour, dt.minute)
-    jd_ut = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
-    ascmc, casas = swe.houses(jd_ut, lat, lon)
-
-    ascendente = ascmc[0]
-    mc = ascmc[1]
-    cusps_dict = {f"casa_{i+1}": round(c, 6) for i, c in enumerate(casas)}
-    fechas = fechas_sol_en_cusps(cusps_dict, dt.year, lat, lon, ts, sun)
-
-    result = {
-        "ascendente": round(ascendente, 6),
-        "medio_cielo": round(mc, 6),
-        "cusps": cusps_dict,
-        "fechas_sol_en_cusps": fechas
-    }
-
-    return jsonify(result)
-
 
 if __name__ == '__main__':
     print("🚀 Servidor iniciado en http://127.0.0.1:5050")
