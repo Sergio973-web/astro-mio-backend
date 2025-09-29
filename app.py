@@ -3,7 +3,6 @@ from flask_cors import CORS
 from skyfield.api import load, wgs84
 from datetime import datetime, timedelta
 import pytz
-import swisseph as swe
 import traceback
 
 app = Flask(__name__)
@@ -13,12 +12,14 @@ CORS(app)
 ephemeris = load('de421.bsp')
 earth = ephemeris['earth']
 moon = ephemeris['moon']
+sun = ephemeris['sun']
 ts = load.timescale()
 observer = earth + wgs84.latlon(-35.6581, -63.7575, elevation_m=135)
 
 SIDEREAL_PERIOD = 27.321661  # días
 
 def angular_distance(ra1, dec1, ra2, dec2):
+    """Distancia angular en grados entre dos coordenadas RA/DEC"""
     from math import radians, degrees, acos, sin, cos
     ra1, dec1, ra2, dec2 = map(radians, [ra1, dec1, ra2, dec2])
     return degrees(acos(sin(dec1)*sin(dec2) + cos(dec1)*cos(dec2)*cos(ra1-ra2)))
@@ -55,24 +56,21 @@ def api_luna():
             fecha0 = argentina_tz.localize(fecha0)
         fecha0 = fecha0.astimezone(pytz.utc)
 
-        # Calcular posición de la Luna
+        # Posición de la Luna en fecha de nacimiento
         t_luna = ts.utc(fecha0.year, fecha0.month, fecha0.day, fecha0.hour, fecha0.minute)
-        astrometric = observer.at(t_luna).observe(moon).apparent()
-        ra_luna, dec_luna, _ = astrometric.radec()
+        astrometric_luna = observer.at(t_luna).observe(moon).apparent()
+        ra_luna, dec_luna, _ = astrometric_luna.radec()
         ra_luna_deg = ra_luna.hours * 15
         dec_luna_deg = dec_luna.degrees
 
         # Buscar fecha del Sol más cercana a la posición de la Luna
-        fecha_sol = None
-        min_diff = 1e6
-        # Búsqueda ±365 días desde la fecha de nacimiento
+        fecha_sol_equivalente = None
+        min_diff = float('inf')
+
         for delta in range(-365, 366):
             f = fecha0 + timedelta(days=delta)
-            jd_ut = swe.julday(f.year, f.month, f.day, f.hour + f.minute / 60.0)
-            sun_pos = swe.calc_ut(jd_ut, swe.SUN)[0]  # longitud eclíptica
-            # Convertimos a RA/DEC usando Skyfield para consistencia
-            t_sf = ts.utc(f.year, f.month, f.day)
-            astrometric_sol = observer.at(t_sf).observe(ephemeris['sun']).apparent()
+            t_sol = ts.utc(f.year, f.month, f.day)
+            astrometric_sol = observer.at(t_sol).observe(sun).apparent()
             ra_sol, dec_sol, _ = astrometric_sol.radec()
             ra_sol_deg = ra_sol.hours * 15
             dec_sol_deg = dec_sol.degrees
@@ -80,13 +78,13 @@ def api_luna():
             diff = angular_distance(ra_luna_deg, dec_luna_deg, ra_sol_deg, dec_sol_deg)
             if diff < min_diff:
                 min_diff = diff
-                fecha_sol = f
+                fecha_sol_equivalente = f
             if min_diff <= tolerancia:
-                break  # encontramos coincidencia exacta
+                break  # coincidencia suficiente
 
         resultado = {
-            'fecha_luna': fecha0.strftime('%Y-%m-%d %H:%M'),
-            'sol_equivalente': fecha_sol.strftime('%Y-%m-%d') if fecha_sol else None,
+            'fecha_luna': fecha0.isoformat(),
+            'sol_equivalente': fecha_sol_equivalente.isoformat() if fecha_sol_equivalente else None,
             'interpretacion': "Energía Complementaria Día de nacimiento" if sexo else ""
         }
 
