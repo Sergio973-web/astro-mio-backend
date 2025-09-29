@@ -4,6 +4,7 @@ from skyfield.api import load, wgs84
 from datetime import datetime, timedelta
 import pytz
 import os
+from math import radians, degrees, acos, sin, cos
 
 app = Flask(__name__)
 CORS(app)
@@ -22,6 +23,11 @@ def diff_angle(a, b):
     """Diferencia mínima entre dos ángulos en grados"""
     d = abs(a - b) % 360
     return min(d, 360 - d)
+
+def angular_distance(ra1, dec1, ra2, dec2):
+    """Devuelve la distancia angular en grados entre dos coordenadas RA/DEC"""
+    ra1, dec1, ra2, dec2 = map(radians, [ra1, dec1, ra2, dec2])
+    return degrees(acos(sin(dec1)*sin(dec2) + cos(dec1)*cos(dec2)*cos(ra1-ra2)))
 
 @app.route('/')
 def home():
@@ -44,6 +50,8 @@ def api_luna():
         if fecha0.tzinfo is None:
             fecha0 = argentina_tz.localize(fecha0)
         fecha0 = fecha0.astimezone(pytz.utc)
+        # Tomar solo la fecha, ignorar hora para coincidencias
+        fecha0 = fecha0.replace(hour=0, minute=0, second=0, microsecond=0)
 
         def calcular_posicion_luna(fecha):
             t = ts.utc(fecha.year, fecha.month, fecha.day, fecha.hour, fecha.minute, fecha.second)
@@ -91,7 +99,7 @@ def api_luna():
                 f = fecha_inicio + timedelta(days=i)
                 t_sol = ts.utc(f.year, f.month, f.day)
                 ra_sol, dec_sol, _ = observer.at(t_sol).observe(sun).apparent().radec()
-                diff = diff_angle(ra_luna, ra_sol.hours * 15) + abs(dec_luna - dec_sol.degrees)
+                diff = angular_distance(ra_luna, dec_luna, ra_sol.hours * 15, dec_sol.degrees)
                 if diff < min_diff:
                     min_diff = diff
                     fecha_sol = f
