@@ -47,10 +47,10 @@ def api_luna():
             tol_degrees = float(tolerancia_str)
         except ValueError:
             return jsonify({'error': 'Tolerancia debe ser un número'}), 400
-
-        # Parsear fecha y ajustar a zona horaria Argentina
-        argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
+        
         try:
+            # Parsear fecha y ajustar a zona horaria Argentina
+            argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
             fecha0 = datetime.fromisoformat(fecha_str)
             if fecha0.tzinfo is None:
                 fecha0 = argentina_tz.localize(fecha0)
@@ -114,6 +114,8 @@ def api_luna():
             if diferencia < diferencia_minima and diff_ra < tol_degrees and diff_dec < tol_degrees:
                 diferencia_minima = diferencia
                 fecha_sol_mas_cercana = fecha_busqueda
+                ra_sol_final = ra_sol.hours * 15
+                dec_sol_final = dec_sol.degrees
 
         interpretacion = "Energía Complementaria Día de nacimiento" if sexo in ['masculino','femenino'] else ""
 
