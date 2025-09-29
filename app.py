@@ -17,13 +17,6 @@ sun = ephemeris['sun']
 ts = load.timescale()
 observer = earth + wgs84.latlon(-35.6581, -63.7575, elevation_m=135)
 
-SIDEREAL_PERIOD = 27.321661  # días
-
-def diff_angle(a, b):
-    """Diferencia mínima entre dos ángulos en grados"""
-    d = abs(a - b) % 360
-    return min(d, 360 - d)
-
 def angular_distance(ra1, dec1, ra2, dec2):
     """Devuelve la distancia angular en grados entre dos coordenadas RA/DEC"""
     ra1, dec1, ra2, dec2 = map(radians, [ra1, dec1, ra2, dec2])
@@ -38,11 +31,10 @@ def api_luna():
     try:
         data = request.get_json()
         fecha_str = data.get('fecha')
-        tolerancia = float(data.get('tolerancia', 10))
         sexo = data.get('sexo', '').lower()
 
         argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
-        # Intentar parsear fecha en ISO, sino con formato DD/MM/YYYY
+        # Intentar parsear fecha en ISO, sino con formato DD/MM/YYYY HH:MM
         try:
             fecha0 = datetime.fromisoformat(fecha_str)
         except:
@@ -67,7 +59,6 @@ def api_luna():
         ra_luna, dec_luna = calcular_posicion_luna(fecha0)
 
         # Buscar la fecha del Sol cuya posición se alinea mejor con la Luna
-        # Iterar +/- 365 días (1 año) o más si se quiere
         dias_busqueda = 365
         min_diff = float('inf')
         fecha_sol_equivalente = None
@@ -80,9 +71,17 @@ def api_luna():
                 min_diff = diff
                 fecha_sol_equivalente = f
 
+        # Generar rango ±3 días alrededor del Sol equivalente
+        rango_inicio = fecha_sol_equivalente - timedelta(days=3)
+        rango_fin = fecha_sol_equivalente + timedelta(days=3)
+
         resultado = {
             'fecha_luna': fecha0.strftime('%Y-%m-%d %H:%M'),
-            'sol_equivalente': fecha_sol_equivalente.strftime('%Y-%m-%d') if fecha_sol_equivalente else None,
+            'sol_equivalente': fecha_sol_equivalente.strftime('%Y-%m-%d'),
+            'rango_sol': {
+                'desde': rango_inicio.strftime('%Y-%m-%d'),
+                'hasta': rango_fin.strftime('%Y-%m-%d')
+            },
             'interpretacion': "Energía Complementaria Día de nacimiento" if sexo else ""
         }
 
