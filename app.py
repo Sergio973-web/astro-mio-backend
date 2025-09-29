@@ -1,16 +1,17 @@
 from flask_cors import CORS
 from flask import Flask, request, jsonify
-from skyfield.api import load, wgs84
+from skyfield.api import load, wgs84, Topos
 from datetime import datetime, timedelta
 import pytz
 import traceback
 import sys
+import swisseph as swe  # PySwissEphemeris
 
 app = Flask(__name__)
 CORS(app)
 
 try:
-    # Cargar efemérides DE421
+    # Cargar efemérides y objetos celestes
     ephemeris = load('de421.bsp')
     earth = ephemeris['earth']
     moon = ephemeris['moon']
@@ -22,16 +23,12 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-SIDEREAL_PERIOD = 27.321661  # período sideral de la Luna
-
-def angular_distance(ra1, dec1, ra2, dec2):
-    from math import radians, degrees, acos, sin, cos
-    ra1, dec1, ra2, dec2 = map(radians, [ra1, dec1, ra2, dec2])
-    return degrees(acos(sin(dec1)*sin(dec2) + cos(dec1)*cos(dec2)*cos(ra1-ra2)))
+SIDEREAL_PERIOD = 27.321661
 
 @app.route('/api/luna', methods=['POST'])
 def api_luna():
     try:
+        print("📥 Solicitud recibida en /api/luna")
         data = request.get_json()
         if not data:
             return jsonify({'error': 'No se recibió un JSON válido'}), 400
@@ -47,9 +44,8 @@ def api_luna():
             tol_degrees = float(tolerancia_str)
         except ValueError:
             return jsonify({'error': 'Tolerancia debe ser un número'}), 400
-        
+
         try:
-            # Parsear fecha y ajustar a zona horaria Argentina
             argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
             fecha0 = datetime.fromisoformat(fecha_str)
             if fecha0.tzinfo is None:
@@ -93,13 +89,14 @@ def api_luna():
         if not orbita_encontrada:
             return jsonify({'orbitas': []})
 
-        # Buscar fecha solar equivalente
+        # Buscar fecha solar equivalente (más cercana)
         fecha_luna = datetime.strptime(orbita_encontrada['fecha'], '%Y-%m-%d').replace(tzinfo=pytz.utc)
         ra_luna = orbita_encontrada['ra_luna']
         dec_luna = orbita_encontrada['dec_luna']
 
         fecha_sol_mas_cercana = None
         diferencia_minima = float('inf')
+        ra_sol_final = dec_sol_final = 0.0
 
         for i in range(366):
             fecha_busqueda = fecha_luna.replace(month=1, day=1) + timedelta(days=i)
@@ -117,7 +114,11 @@ def api_luna():
                 ra_sol_final = ra_sol.hours * 15
                 dec_sol_final = dec_sol.degrees
 
-        interpretacion = "Energía Complementaria Día de nacimiento" if sexo in ['masculino','femenino'] else ""
+        interpretacion = ""
+        if sexo == "femenino":
+            interpretacion = "Energía Complementaria Día de nacimiento"
+        elif sexo == "masculino":
+            interpretacion = "Energía Complementaria Día de nacimiento"
 
         orbita_encontrada['sol_equivalente'] = fecha_sol_mas_cercana.strftime('%Y-%m-%d') if fecha_sol_mas_cercana else "No encontrada"
         orbita_encontrada['interpretacion'] = interpretacion
@@ -128,8 +129,76 @@ def api_luna():
         return jsonify({'orbitas': [orbita_encontrada]})
 
     except Exception as e:
+        print("❌ Error en el procesamiento de la solicitud:")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+# Inicializamos Skyfield para casas
+ts = load.timescale()
+planets = load('de421.bsp')
+earth = planets['earth']
+sun = planets['sun']
+
+# Función para calcular las fechas en que el Sol cruza cada cúspide
+def fechas_sol_en_cusps(cusps, anio, lat, lon, ts, sun, tolerancia=1.0):
+    fechas_resultado = {}
+
+    for casa, cuspide in cusps.items():
+        fecha_encontrada = None
+
+        for i in range(366):
+            fecha = datetime(anio, 1, 1, tzinfo=pytz.utc) + timedelta(days=i)
+            t = ts.utc(fecha.year, fecha.month, fecha.day)
+            observer = earth + Topos(latitude_degrees=lat, longitude_degrees=lon)
+            astros_sol = observer.at(t).observe(sun)
+            ecl_lon = astros_sol.apparent().ecliptic_latlon()[1].degrees
+            diff = abs((ecl_lon - cuspide + 180) % 360 - 180)
+
+            if diff < tolerancia:
+                fecha_encontrada = fecha.strftime('%Y-%m-%d')
+                break
+
+        fechas_resultado[casa] = fecha_encontrada or 'No encontrada'
+
+    return fechas_resultado
+
+
+@app.route('/api/casas', methods=['POST'])
+def api_casas():
+    data = request.get_json()
+
+    if not all(k in data for k in ('fecha', 'lat', 'lon')):
+        return jsonify({"error": "Faltan datos: 'fecha', 'lat', 'lon'"}), 400
+
+    dt_str = data['fecha']
+    lat = data['lat']
+    lon = data['lon']
+
+    try:
+        dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M")
+        dt = pytz.utc.localize(dt)
+    except ValueError:
+        return jsonify({"error": "Formato de fecha inválido. Esperado: YYYY-MM-DDTHH:MM"}), 400
+
+    t = ts.utc(dt.year, dt.month, dt.day, dt.hour, dt.minute)
+    jd_ut = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+    ascmc, casas = swe.houses(jd_ut, lat, lon)
+
+    ascendente = ascmc[0]
+    mc = ascmc[1]
+    cusps_dict = {f"casa_{i+1}": round(c, 6) for i, c in enumerate(casas)}
+    fechas = fechas_sol_en_cusps(cusps_dict, dt.year, lat, lon, ts, sun)
+
+    result = {
+        "ascendente": round(ascendente, 6),
+        "medio_cielo": round(mc, 6),
+        "cusps": cusps_dict,
+        "fechas_sol_en_cusps": fechas
+    }
+
+    return jsonify(result)
+
 
 if __name__ == '__main__':
     print("🚀 Servidor iniciado en http://127.0.0.1:5050")
